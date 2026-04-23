@@ -229,7 +229,7 @@ with col1:
     dataset = st.selectbox("📁 Dataset", datasets, index=0)
 
 with col2:
-    strategy = st.selectbox("🎯 Strategy", ["ORB", "Volman"], index=0)
+    strategy = st.selectbox("🎯 Strategy", ["ORB", "MeanRev", "Volman"], index=0)
 
 # Load data
 with st.spinner("Loading data..."):
@@ -280,6 +280,24 @@ if strategy == "ORB":
                  "Filters out counter-trend breakouts in choppy markets."
         )
         regime_ma_days = st.number_input("Regime MA days", 20, 400, 200, 10) if use_regime_filter else 200
+
+elif strategy == "MeanRev":
+    st.subheader("⚙️ Mean Reversion Parameters")
+    st.caption("Connors RSI-2 style — buy extreme oversold in uptrend, sell oversold bounce.")
+    c1, c2 = st.columns(2)
+    with c1:
+        mr_rsi_oversold = st.slider("RSI(2) buy threshold", 1.0, 30.0, 10.0, 1.0,
+                                    help="Lower = more extreme oversold required")
+        mr_regime_ma = st.select_slider("Regime MA days", [50, 100, 150, 200, 250], value=200)
+    with c2:
+        mr_direction = st.radio("Direction", ["Long only", "Short only", "Both"], index=0, horizontal=True)
+        mr_realistic = st.toggle("Realistic execution", value=True, key="mr_realistic")
+
+    with st.expander("Advanced"):
+        mr_slippage = st.slider("Slippage (ticks/side)", 0.0, 3.0, 1.0, 0.5, key="mr_slippage")
+        mr_max_hold = st.slider("Max hold days", 2, 20, 10, 1)
+        mr_atr_stop = st.slider("Stop: ATR ×", 0.5, 5.0, 2.0, 0.5)
+        mr_use_regime = st.checkbox("Use 200-day MA regime filter", value=True, key="mr_regime")
 
 else:  # Volman
     st.subheader("⚙️ Volman Parameters")
@@ -354,6 +372,39 @@ if run:
                     cash=cash, plot=False,
                     realistic=realistic,
                     slippage_ticks=slippage_ticks if realistic else 0.0,
+                )
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+        elif strategy == "MeanRev":
+            from meanrev_strategy import MeanRevConfig
+            from backtest_meanrev import run_meanrev_backtest
+            cfg = MeanRevConfig(
+                rsi_oversold=mr_rsi_oversold,
+                rsi_overbought=100 - mr_rsi_oversold,
+                regime_ma_days=mr_regime_ma,
+                max_hold_days=mr_max_hold,
+                atr_stop_mult=mr_atr_stop,
+                long_only=(mr_direction == "Long only"),
+                short_only=(mr_direction == "Short only"),
+                use_regime_ma=mr_use_regime,
+            )
+            spec = INSTRUMENTS[instrument]
+            cfg.tick_size = spec["tick_size"]
+            cfg.tick_value = spec["tick_value"]
+            cfg.multiplier = spec["multiplier"]
+            cfg.commission_per_side = spec["commission"]
+            cfg.instrument = instrument
+
+            progress.progress(50, "Running Mean Reversion backtest...")
+            tmp_path = DATA_DIR / f"_tmp_mr_{os.getpid()}.parquet"
+            df.to_parquet(tmp_path)
+            try:
+                stats = run_meanrev_backtest(
+                    tmp_path, cfg,
+                    cash=cash, plot=False,
+                    realistic=mr_realistic,
+                    slippage_ticks=mr_slippage if mr_realistic else 0.0,
                 )
             finally:
                 if tmp_path.exists():

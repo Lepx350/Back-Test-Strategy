@@ -1,0 +1,9 @@
+streamlit>=1.30.0
+databento>=0.40.0
+pandas>=2.0.0
+numpy>=1.24.0
+backtesting>=0.3.3
+plotly>=5.17.0
+matplotlib>=3.7.0
+pyarrow>=14.0.0
+tqdm>=4.65.0

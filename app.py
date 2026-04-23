@@ -152,6 +152,28 @@ if not datasets:
     st.stop()
 
 # ================================================================
+# DATA MANAGEMENT — download to phone, delete from server
+# ================================================================
+with st.expander("💾 Manage Data Files"):
+    st.caption("Download a dataset to your phone, then upload to GitHub for permanence.")
+    for ds in datasets:
+        fpath = DATA_DIR / ds
+        size_mb = fpath.stat().st_size / (1024 * 1024)
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.markdown(f"**{ds}**  \n`{size_mb:.1f} MB`")
+        with c2:
+            with open(fpath, "rb") as f:
+                st.download_button(
+                    label="⬇️ Download",
+                    data=f.read(),
+                    file_name=ds,
+                    mime="application/octet-stream",
+                    key=f"dl_{ds}",
+                    use_container_width=True,
+                )
+
+# ================================================================
 # CONTROLS (top-level, tap-friendly)
 # ================================================================
 col1, col2 = st.columns(2)
@@ -166,6 +188,27 @@ with col2:
 with st.spinner("Loading data..."):
     df = load_dataset(dataset)
     st.caption(f"📊 {len(df):,} bars · {df.index.min().date()} → {df.index.max().date()}")
+
+# ================================================================
+# DATE RANGE FILTER (for split-half validation & regime testing)
+# ================================================================
+with st.expander("📅 Date Range Filter (test sub-periods)"):
+    dmin = df.index.min().date()
+    dmax = df.index.max().date()
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        filter_start = st.date_input("From", value=dmin, min_value=dmin, max_value=dmax, key="filter_start")
+    with dc2:
+        filter_end = st.date_input("To", value=dmax, min_value=dmin, max_value=dmax, key="filter_end")
+
+    # Apply filter
+    mask = (df.index.date >= filter_start) & (df.index.date <= filter_end)
+    filtered_bars = mask.sum()
+    if filtered_bars < len(df):
+        df = df.loc[mask]
+        st.info(f"🔍 Filtered to {filtered_bars:,} bars ({filter_start} → {filter_end})")
+    else:
+        st.caption("Using full dataset")
 
 # ================================================================
 # STRATEGY-SPECIFIC CONTROLS
@@ -246,12 +289,19 @@ if run:
             cfg.instrument = instrument
 
             progress.progress(50, "Running ORB backtest...")
-            stats = run_orb_backtest(
-                DATA_DIR / dataset, cfg,
-                cash=cash, plot=False,
-                realistic=realistic,
-                slippage_ticks=slippage_ticks if realistic else 0.0,
-            )
+            # Write filtered df to temp file for the runner
+            tmp_path = DATA_DIR / f"_tmp_orb_{os.getpid()}.parquet"
+            df.to_parquet(tmp_path)
+            try:
+                stats = run_orb_backtest(
+                    tmp_path, cfg,
+                    cash=cash, plot=False,
+                    realistic=realistic,
+                    slippage_ticks=slippage_ticks if realistic else 0.0,
+                )
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink()
         else:
             cfg = VolmanConfig(
                 tp_atr_mult=tp_mult,
@@ -263,8 +313,14 @@ if run:
             )
             apply_instrument(cfg, instrument)
             progress.progress(50, "Running Volman backtest...")
-            result = run_volman_backtest(DATA_DIR / dataset, cfg, cash=cash, plot=False)
-            stats = result["stats"]
+            tmp_path = DATA_DIR / f"_tmp_volman_{os.getpid()}.parquet"
+            df.to_parquet(tmp_path)
+            try:
+                result = run_volman_backtest(tmp_path, cfg, cash=cash, plot=False)
+                stats = result["stats"]
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink()
 
         progress.progress(90, "Processing results...")
         elapsed = (datetime.now() - start_time).total_seconds()

@@ -273,6 +273,13 @@ if strategy == "ORB":
     with st.expander("Advanced"):
         slippage_ticks = st.slider("Slippage (ticks/side)", 0.0, 3.0, 1.0, 0.5)
         use_trend_filter = st.checkbox("Gap-direction filter", value=True)
+        use_regime_filter = st.checkbox(
+            "200-day MA regime filter",
+            value=False,
+            help="Only take longs when price above 200-day MA, shorts when below. "
+                 "Filters out counter-trend breakouts in choppy markets."
+        )
+        regime_ma_days = st.number_input("Regime MA days", 20, 400, 200, 10) if use_regime_filter else 200
 
 else:  # Volman
     st.subheader("⚙️ Volman Parameters")
@@ -327,6 +334,8 @@ if run:
                 long_only=(direction == "Long only"),
                 short_only=(direction == "Short only"),
                 use_trend_filter=use_trend_filter,
+                use_regime_filter=use_regime_filter,
+                regime_ma_days=int(regime_ma_days),
             )
             spec = INSTRUMENTS[instrument]
             cfg.tick_size = spec["tick_size"]

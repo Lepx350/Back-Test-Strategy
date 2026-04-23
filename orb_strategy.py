@@ -47,6 +47,10 @@ class ORBConfig:
     use_trend_filter: bool = True     # Require gap direction to align with break
     gap_size_min_atr: float = 0.0     # Minimum gap size to require directional bias
 
+    # Regime filter (NEW)
+    use_regime_filter: bool = False   # Only trade longs above N-day MA, shorts below
+    regime_ma_days: int = 200         # Lookback for regime MA
+
     # Risk
     target_mode: str = "or_multiple"  # "or_multiple" | "atr" | "opposite_side"
     target_mult: float = 1.0          # 1x OR range, or 1x ATR
@@ -136,6 +140,26 @@ def generate_orb_signals(df: pd.DataFrame, cfg: ORBConfig) -> pd.DataFrame:
         gap_dn = out["today_open"] < out["prev_close"]
         first_long = first_long & gap_up
         first_short = first_short & gap_dn
+
+    # Regime filter: only long above N-day MA, only short below
+    if cfg.use_regime_filter:
+        session_mask = is_session
+        # Daily close at session close
+        daily_close_series = out.loc[session_mask, "close"].groupby(
+            out.index[session_mask].normalize()
+        ).last()
+        # Daily MA, shifted 1 day to avoid lookahead
+        daily_ma = daily_close_series.rolling(cfg.regime_ma_days, min_periods=20).mean().shift(1)
+        out["regime_ma"] = out.index.normalize().map(daily_ma)
+        # Today's open compared to yesterday's MA
+        above_ma = out["today_open"] > out["regime_ma"] if "today_open" in out.columns else (
+            out["open"] > out["regime_ma"]
+        )
+        below_ma = out["today_open"] < out["regime_ma"] if "today_open" in out.columns else (
+            out["open"] < out["regime_ma"]
+        )
+        first_long = first_long & above_ma.fillna(False)
+        first_short = first_short & below_ma.fillna(False)
 
     # Ensure we don't double-trade same day (long AND short)
     any_break = first_long | first_short

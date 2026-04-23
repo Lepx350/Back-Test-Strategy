@@ -67,9 +67,88 @@ def load_dataset(fname: str) -> pd.DataFrame:
 
 
 datasets = list_datasets()
+
+# ================================================================
+# FETCH DATA — always available, essential when no data exists
+# ================================================================
+with st.expander("📥 Fetch Data from Databento", expanded=not datasets):
+    st.markdown(
+        "Pull historical futures data directly to the cloud. "
+        "Previously-purchased data re-downloads at no extra cost."
+    )
+
+    has_api_key = bool(os.getenv("DATABENTO_API_KEY"))
+    if not has_api_key:
+        st.warning(
+            "⚠️ `DATABENTO_API_KEY` not set. On Railway: "
+            "**Settings → Variables → New Variable** → add `DATABENTO_API_KEY` = `db-xxxx`"
+        )
+
+    fc1, fc2 = st.columns(2)
+    with fc1:
+        fetch_symbol = st.selectbox(
+            "Symbol", ["ES", "MES", "NQ", "MNQ", "RTY", "M2K", "YM", "MYM", "GC", "MGC", "CL", "MCL"],
+            index=0, key="fetch_symbol"
+        )
+        fetch_schema = st.selectbox("Bar Size", ["ohlcv-1m", "ohlcv-5m", "ohlcv-1h"], index=0)
+    with fc2:
+        fetch_start = st.date_input("Start Date", value=pd.Timestamp("2020-01-01"),
+                                    min_value=pd.Timestamp("2010-01-01"),
+                                    max_value=pd.Timestamp("2026-04-22"))
+        fetch_end = st.date_input("End Date", value=pd.Timestamp("2026-04-22"),
+                                  min_value=pd.Timestamp("2010-01-01"),
+                                  max_value=pd.Timestamp("2026-04-22"))
+
+    fetch_btn = st.button("🚀 Fetch Data", type="primary",
+                           disabled=not has_api_key, key="fetch_btn")
+
+    if fetch_btn:
+        try:
+            import databento as db
+            client = db.Historical(os.getenv("DATABENTO_API_KEY"))
+
+            with st.spinner(f"Estimating cost..."):
+                cost = client.metadata.get_cost(
+                    dataset="GLBX.MDP3",
+                    symbols=[f"{fetch_symbol}.c.0"],
+                    stype_in="continuous",
+                    schema=fetch_schema,
+                    start=str(fetch_start),
+                    end=str(fetch_end),
+                )
+            st.info(f"💰 Estimated cost: **${cost:.2f}** "
+                    f"(Data previously purchased = $0.00)")
+
+            with st.spinner(f"Downloading {fetch_symbol} from Databento... (30-120s for large ranges)"):
+                data = client.timeseries.get_range(
+                    dataset="GLBX.MDP3",
+                    symbols=[f"{fetch_symbol}.c.0"],
+                    stype_in="continuous",
+                    schema=fetch_schema,
+                    start=str(fetch_start),
+                    end=str(fetch_end),
+                )
+                df = data.to_df()
+                df.index = pd.to_datetime(df.index, utc=True).tz_convert("America/New_York")
+                df.index.name = "datetime"
+                keep = ["open", "high", "low", "close", "volume"]
+                df = df[keep].astype({c: float for c in keep})
+
+                fname = f"{fetch_symbol}_{fetch_schema}_{df.index.min().date()}_{df.index.max().date()}.parquet"
+                out_path = DATA_DIR / fname
+                df.to_parquet(out_path)
+
+            st.success(f"✅ Downloaded {len(df):,} bars → `{fname}`")
+            st.info("♻️ Refresh the page or pick the new dataset above")
+            st.cache_data.clear()  # Refresh the dataset list
+
+        except Exception as e:
+            st.error(f"❌ Fetch failed: {e}")
+
+# Re-check datasets after potential fetch
+datasets = list_datasets()
 if not datasets:
-    st.error("⚠️ No data found in `/data` folder. Add parquet files to get started.")
-    st.info("Upload ES data: `python fetch_data.py --symbol ES --start 2020-01-01 --end 2026-04-22`")
+    st.warning("📭 No data yet. Use the Fetch Data panel above to download some.")
     st.stop()
 
 # ================================================================

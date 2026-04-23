@@ -102,12 +102,16 @@ with st.expander("📥 Fetch Data from Databento", expanded=not datasets):
     fetch_btn = st.button("🚀 Fetch Data", type="primary",
                            disabled=not has_api_key, key="fetch_btn")
 
-    if fetch_btn:
+    # Guard against double-fetch from mobile touch events
+    if fetch_btn and not st.session_state.get("_fetch_in_progress"):
+        st.session_state["_fetch_in_progress"] = True
         try:
             import databento as db
             client = db.Historical(os.getenv("DATABENTO_API_KEY"))
 
-            with st.spinner(f"Estimating cost..."):
+            # Estimate cost (cheap API call)
+            cost_placeholder = st.empty()
+            with st.spinner("Checking cost..."):
                 cost = client.metadata.get_cost(
                     dataset="GLBX.MDP3",
                     symbols=[f"{fetch_symbol}.c.0"],
@@ -116,34 +120,77 @@ with st.expander("📥 Fetch Data from Databento", expanded=not datasets):
                     start=str(fetch_start),
                     end=str(fetch_end),
                 )
-            st.info(f"💰 Estimated cost: **${cost:.2f}** "
-                    f"(Data previously purchased = $0.00)")
+            cost_placeholder.info(
+                f"💰 Estimated cost: **${cost:.2f}** "
+                f"(Data previously purchased = $0.00)"
+            )
 
-            with st.spinner(f"Downloading {fetch_symbol} from Databento... (30-120s for large ranges)"):
+            # Chunk large ranges into yearly slices to avoid timeouts / memory spikes
+            start_dt = pd.Timestamp(fetch_start)
+            end_dt = pd.Timestamp(fetch_end)
+            total_days = (end_dt - start_dt).days
+            CHUNK_DAYS = 365  # 1 year per chunk
+
+            if total_days > CHUNK_DAYS:
+                # Build yearly chunks
+                chunks = []
+                cursor = start_dt
+                while cursor < end_dt:
+                    chunk_end = min(cursor + pd.Timedelta(days=CHUNK_DAYS), end_dt)
+                    chunks.append((cursor.date(), chunk_end.date()))
+                    cursor = chunk_end
+            else:
+                chunks = [(start_dt.date(), end_dt.date())]
+
+            st.caption(f"📦 Fetching in {len(chunks)} chunk(s) to avoid timeouts")
+
+            # Download each chunk and stitch
+            all_dfs = []
+            chunk_progress = st.progress(0, f"Starting... (0/{len(chunks)})")
+            for i, (c_start, c_end) in enumerate(chunks, 1):
+                chunk_progress.progress(
+                    (i - 1) / len(chunks),
+                    f"Downloading chunk {i}/{len(chunks)}: {c_start} → {c_end}",
+                )
                 data = client.timeseries.get_range(
                     dataset="GLBX.MDP3",
                     symbols=[f"{fetch_symbol}.c.0"],
                     stype_in="continuous",
                     schema=fetch_schema,
-                    start=str(fetch_start),
-                    end=str(fetch_end),
+                    start=str(c_start),
+                    end=str(c_end),
                 )
-                df = data.to_df()
-                df.index = pd.to_datetime(df.index, utc=True).tz_convert("America/New_York")
-                df.index.name = "datetime"
+                chunk_df = data.to_df()
+                all_dfs.append(chunk_df)
+                chunk_progress.progress(i / len(chunks),
+                                        f"Got chunk {i}/{len(chunks)} ({len(chunk_df):,} bars)")
+
+            # Combine
+            with st.spinner("Combining chunks..."):
+                df_out = pd.concat(all_dfs, axis=0)
+                df_out = df_out[~df_out.index.duplicated(keep="first")].sort_index()
+                df_out.index = pd.to_datetime(df_out.index, utc=True).tz_convert("America/New_York")
+                df_out.index.name = "datetime"
                 keep = ["open", "high", "low", "close", "volume"]
-                df = df[keep].astype({c: float for c in keep})
+                df_out = df_out[keep].astype({c: float for c in keep})
 
-                fname = f"{fetch_symbol}_{fetch_schema}_{df.index.min().date()}_{df.index.max().date()}.parquet"
+                fname = (f"{fetch_symbol}_{fetch_schema}_"
+                         f"{df_out.index.min().date()}_{df_out.index.max().date()}.parquet")
                 out_path = DATA_DIR / fname
-                df.to_parquet(out_path)
+                df_out.to_parquet(out_path)
 
-            st.success(f"✅ Downloaded {len(df):,} bars → `{fname}`")
+            chunk_progress.progress(1.0, f"✅ Done ({len(df_out):,} bars)")
+            st.success(f"✅ Downloaded {len(df_out):,} bars → `{fname}`")
             st.info("♻️ Refresh the page or pick the new dataset above")
-            st.cache_data.clear()  # Refresh the dataset list
+            st.cache_data.clear()
 
         except Exception as e:
-            st.error(f"❌ Fetch failed: {e}")
+            st.error(f"❌ Fetch failed: {type(e).__name__}: {e}")
+            with st.expander("Show traceback"):
+                import traceback
+                st.code(traceback.format_exc())
+        finally:
+            st.session_state["_fetch_in_progress"] = False
 
 # Re-check datasets after potential fetch
 datasets = list_datasets()

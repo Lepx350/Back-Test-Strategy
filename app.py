@@ -229,7 +229,7 @@ with col1:
     dataset = st.selectbox("📁 Dataset", datasets, index=0)
 
 with col2:
-    strategy = st.selectbox("🎯 Strategy", ["ORB", "MeanRev", "Volman"], index=0)
+    strategy = st.selectbox("🎯 Strategy", ["ORB", "MeanRev", "IntradayVWAP", "Volman"], index=0)
 
 # Load data
 with st.spinner("Loading data..."):
@@ -298,6 +298,57 @@ elif strategy == "MeanRev":
         mr_max_hold = st.slider("Max hold days", 2, 20, 10, 1)
         mr_atr_stop = st.slider("Stop: ATR ×", 0.5, 5.0, 2.0, 0.5)
         mr_use_regime = st.checkbox("Use 200-day MA regime filter", value=True, key="mr_regime")
+
+elif strategy == "IntradayVWAP":
+    st.subheader("⚙️ Intraday VWAP Rejection Fade")
+    st.caption("Fade extensions from session VWAP. Fixed-point SL/TP. Closes by EOD — no overnight risk.")
+
+    # Input mode toggle
+    input_mode = st.radio("Input mode", ["Slider", "Exact value"], horizontal=True, key="iv_mode")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if input_mode == "Slider":
+            iv_stop_pts = st.slider("Stop (points)", 0.5, 30.0, 4.0, 0.25,
+                                    help="Fixed stop in points. ES: 4 pts = $200/contract")
+            iv_target_pts = st.slider("Target (points)", 0.5, 50.0, 6.0, 0.25,
+                                      help="Fixed target in points. ES: 6 pts = $300/contract")
+        else:
+            iv_stop_pts = st.number_input("Stop (points)", min_value=0.25, max_value=100.0,
+                                          value=4.0, step=0.25,
+                                          help="Any value — type precise number")
+            iv_target_pts = st.number_input("Target (points)", min_value=0.25, max_value=200.0,
+                                            value=6.0, step=0.25,
+                                            help="Any value — type precise number")
+        iv_ext_atr = st.slider("Extension (× ATR)", 0.5, 5.0, 2.5, 0.25,
+                               help="How far from VWAP triggers setup")
+    with c2:
+        iv_direction = st.radio("Direction", ["Both", "Long only", "Short only"],
+                                 index=0, horizontal=True, key="iv_dir")
+        iv_realistic = st.toggle("Realistic execution", value=True, key="iv_realistic")
+        iv_max_trades = st.slider("Max trades/day", 1, 10, 3, 1, key="iv_maxtrades")
+
+    # Live R/R + dollar preview
+    _rr = iv_target_pts / iv_stop_pts if iv_stop_pts > 0 else 0
+    _be_wr = 100 / (1 + _rr) if _rr > 0 else 100
+    spec_preview = INSTRUMENTS.get(instrument if 'instrument' in dir() else 'ES', INSTRUMENTS["ES"]) \
+                   if 'INSTRUMENTS' in dir() else {"multiplier": 50}
+    _mult = spec_preview.get("multiplier", 50)
+    _sl_dollars = iv_stop_pts * _mult
+    _tp_dollars = iv_target_pts * _mult
+
+    c3, c4, c5 = st.columns(3)
+    with c3:
+        st.metric("R/R Ratio", f"{_rr:.2f}:1")
+    with c4:
+        st.metric("Breakeven WR", f"{_be_wr:.1f}%")
+    with c5:
+        st.metric("$ Risk / $ Win", f"${_sl_dollars:.0f} / ${_tp_dollars:.0f}")
+
+    with st.expander("Advanced"):
+        iv_slippage = st.slider("Slippage (ticks/side)", 0.0, 3.0, 1.0, 0.5, key="iv_slip")
+        iv_require_reject = st.checkbox("Require rejection candle", value=True,
+                                         help="Wait for opposing candle pattern before entering")
 
 else:  # Volman
     st.subheader("⚙️ Volman Parameters")
@@ -405,6 +456,38 @@ if run:
                     cash=cash, plot=False,
                     realistic=mr_realistic,
                     slippage_ticks=mr_slippage if mr_realistic else 0.0,
+                )
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+        elif strategy == "IntradayVWAP":
+            from intraday_vwap_strategy import IntradayVWAPConfig
+            from backtest_intraday_vwap import run_intraday_vwap_backtest
+            cfg = IntradayVWAPConfig(
+                stop_points=iv_stop_pts,
+                target_points=iv_target_pts,
+                extension_atr_mult=iv_ext_atr,
+                max_trades_per_day=iv_max_trades,
+                long_only=(iv_direction == "Long only"),
+                short_only=(iv_direction == "Short only"),
+                require_rejection=iv_require_reject,
+            )
+            spec = INSTRUMENTS[instrument]
+            cfg.tick_size = spec["tick_size"]
+            cfg.tick_value = spec["tick_value"]
+            cfg.multiplier = spec["multiplier"]
+            cfg.commission_per_side = spec["commission"]
+            cfg.instrument = instrument
+
+            progress.progress(50, "Running Intraday VWAP backtest...")
+            tmp_path = DATA_DIR / f"_tmp_iv_{os.getpid()}.parquet"
+            df.to_parquet(tmp_path)
+            try:
+                stats = run_intraday_vwap_backtest(
+                    tmp_path, cfg,
+                    cash=cash, plot=False,
+                    realistic=iv_realistic,
+                    slippage_ticks=iv_slippage if iv_realistic else 0.0,
                 )
             finally:
                 if tmp_path.exists():

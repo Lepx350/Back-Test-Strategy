@@ -2,6 +2,7 @@
 app.py — Volman Backtest Cloud Dashboard
 Mobile-first Streamlit app for running backtests on the go.
 """
+
 import os
 import sys
 from pathlib import Path
@@ -33,12 +34,12 @@ st.set_page_config(
 # Mobile-friendly CSS
 st.markdown("""
 <style>
-    .block-container { padding-top: 1rem; padding-bottom: 1rem; }
-    .stButton>button { width: 100%; height: 3rem; font-size: 1rem; }
-    .metric-container { background: #1a1a1a; padding: 0.5rem; border-radius: 8px; }
-    .stSelectbox>div>div { font-size: 1rem; }
-    h1 { font-size: 1.5rem !important; }
-    h2 { font-size: 1.2rem !important; }
+.block-container { padding-top: 1rem; padding-bottom: 1rem; }
+.stButton>button { width: 100%; height: 3rem; font-size: 1rem; }
+.metric-container { background: #1a1a1a; padding: 0.5rem; border-radius: 8px; }
+.stSelectbox>div>div { font-size: 1rem; }
+h1 { font-size: 1.5rem !important; }
+h2 { font-size: 1.2rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -54,17 +55,14 @@ st.caption("Systematic strategy backtesting, anywhere 📱☁️")
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-
 @st.cache_data
 def list_datasets():
     """Find all parquet files in the data folder."""
     return sorted([p.name for p in DATA_DIR.glob("*.parquet")])
 
-
 @st.cache_data
 def load_dataset(fname: str) -> pd.DataFrame:
     return pd.read_parquet(DATA_DIR / fname)
-
 
 datasets = list_datasets()
 
@@ -93,14 +91,14 @@ with st.expander("📥 Fetch Data from Databento", expanded=not datasets):
         fetch_schema = st.selectbox("Bar Size", ["ohlcv-1m", "ohlcv-5m", "ohlcv-1h"], index=0)
     with fc2:
         fetch_start = st.date_input("Start Date", value=pd.Timestamp("2020-01-01"),
-                                    min_value=pd.Timestamp("2010-01-01"),
-                                    max_value=pd.Timestamp("2026-04-22"))
+                                     min_value=pd.Timestamp("2010-01-01"),
+                                     max_value=pd.Timestamp("2026-04-22"))
         fetch_end = st.date_input("End Date", value=pd.Timestamp("2026-04-22"),
-                                  min_value=pd.Timestamp("2010-01-01"),
-                                  max_value=pd.Timestamp("2026-04-22"))
+                                   min_value=pd.Timestamp("2010-01-01"),
+                                   max_value=pd.Timestamp("2026-04-22"))
 
     fetch_btn = st.button("🚀 Fetch Data", type="primary",
-                           disabled=not has_api_key, key="fetch_btn")
+                          disabled=not has_api_key, key="fetch_btn")
 
     # Guard against double-fetch from mobile touch events
     if fetch_btn and not st.session_state.get("_fetch_in_progress"):
@@ -183,7 +181,6 @@ with st.expander("📥 Fetch Data from Databento", expanded=not datasets):
             st.success(f"✅ Downloaded {len(df_out):,} bars → `{fname}`")
             st.info("♻️ Refresh the page or pick the new dataset above")
             st.cache_data.clear()
-
         except Exception as e:
             st.error(f"❌ Fetch failed: {type(e).__name__}: {e}")
             with st.expander("Show traceback"):
@@ -194,6 +191,7 @@ with st.expander("📥 Fetch Data from Databento", expanded=not datasets):
 
 # Re-check datasets after potential fetch
 datasets = list_datasets()
+
 if not datasets:
     st.warning("📭 No data yet. Use the Fetch Data panel above to download some.")
     st.stop()
@@ -224,17 +222,20 @@ with st.expander("💾 Manage Data Files"):
 # CONTROLS (top-level, tap-friendly)
 # ================================================================
 col1, col2 = st.columns(2)
-
 with col1:
     dataset = st.selectbox("📁 Dataset", datasets, index=0)
-
 with col2:
-    strategy = st.selectbox("🎯 Strategy", ["ORB", "MeanRev", "IntradayVWAP", "Volman"], index=0)
+    strategy = st.selectbox(
+        "🎯 Strategy",
+        ["ORB", "FBO", "MeanRev", "IntradayVWAP", "Volman"],
+        index=0,
+    )
 
 # Load data
 with st.spinner("Loading data..."):
     df = load_dataset(dataset)
-    st.caption(f"📊 {len(df):,} bars · {df.index.min().date()} → {df.index.max().date()}")
+
+st.caption(f"📊 {len(df):,} bars · {df.index.min().date()} → {df.index.max().date()}")
 
 # ================================================================
 # DATE RANGE FILTER (for split-half validation & regime testing)
@@ -262,6 +263,7 @@ with st.expander("📅 Date Range Filter (test sub-periods)"):
 # ================================================================
 if strategy == "ORB":
     st.subheader("⚙️ ORB Parameters")
+
     c1, c2 = st.columns(2)
     with c1:
         or_mins = st.select_slider("OR Minutes", [5, 15, 30, 60], value=15)
@@ -281,13 +283,49 @@ if strategy == "ORB":
         )
         regime_ma_days = st.number_input("Regime MA days", 20, 400, 200, 10) if use_regime_filter else 200
 
+elif strategy == "FBO":
+    st.subheader("⚙️ FBO (Failed Breakout Reversal) Parameters")
+    st.caption(
+        "Fade the FIRST OR breakout that fails to hold. "
+        "Orthogonal to ORB-long: targets range/chop days instead of trend days."
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        fbo_or_mins = st.select_slider("OR Minutes", [5, 15, 30], value=15)
+        fbo_failure_window = st.slider(
+            "Failure window (min)", 10, 60, 30, 5,
+            help="Max minutes after first break to accept a failure trigger",
+        )
+    with c2:
+        fbo_direction = st.radio(
+            "Direction", ["Both", "Long only", "Short only"],
+            index=0, horizontal=True, key="fbo_dir",
+        )
+        fbo_realistic = st.toggle(
+            "Realistic execution", value=True, key="fbo_realistic",
+            help="Next-bar open fills + slippage",
+        )
+
+    with st.expander("Advanced"):
+        fbo_slippage = st.slider("Slippage (ticks/side)", 0.0, 3.0, 1.0, 0.5, key="fbo_slip")
+        fbo_atr_min = st.slider(
+            "OR width / ATR14 — min", 0.10, 1.00, 0.25, 0.05, key="fbo_atr_min",
+            help="Skip days where OR is too narrow (no edge)",
+        )
+        fbo_atr_max = st.slider(
+            "OR width / ATR14 — max", 1.0, 4.0, 2.0, 0.25, key="fbo_atr_max",
+            help="Skip days where OR is huge (event days, blowout opens)",
+        )
+
 elif strategy == "MeanRev":
     st.subheader("⚙️ Mean Reversion Parameters")
     st.caption("Connors RSI-2 style — buy extreme oversold in uptrend, sell oversold bounce.")
+
     c1, c2 = st.columns(2)
     with c1:
         mr_rsi_oversold = st.slider("RSI(2) buy threshold", 1.0, 30.0, 10.0, 1.0,
-                                    help="Lower = more extreme oversold required")
+                                     help="Lower = more extreme oversold required")
         mr_regime_ma = st.select_slider("Regime MA days", [50, 100, 150, 200, 250], value=200)
     with c2:
         mr_direction = st.radio("Direction", ["Long only", "Short only", "Both"], index=0, horizontal=True)
@@ -324,7 +362,7 @@ elif strategy == "IntradayVWAP":
                                help="How far from VWAP triggers setup")
     with c2:
         iv_direction = st.radio("Direction", ["Both", "Long only", "Short only"],
-                                 index=0, horizontal=True, key="iv_dir")
+                                index=0, horizontal=True, key="iv_dir")
         iv_realistic = st.toggle("Realistic execution", value=True, key="iv_realistic")
         iv_max_trades = st.slider("Max trades/day", 1, 10, 3, 1, key="iv_maxtrades")
 
@@ -332,7 +370,7 @@ elif strategy == "IntradayVWAP":
     _rr = iv_target_pts / iv_stop_pts if iv_stop_pts > 0 else 0
     _be_wr = 100 / (1 + _rr) if _rr > 0 else 100
     spec_preview = INSTRUMENTS.get(instrument if 'instrument' in dir() else 'ES', INSTRUMENTS["ES"]) \
-                   if 'INSTRUMENTS' in dir() else {"multiplier": 50}
+        if 'INSTRUMENTS' in dir() else {"multiplier": 50}
     _mult = spec_preview.get("multiplier", 50)
     _sl_dollars = iv_stop_pts * _mult
     _tp_dollars = iv_target_pts * _mult
@@ -352,6 +390,7 @@ elif strategy == "IntradayVWAP":
 
 else:  # Volman
     st.subheader("⚙️ Volman Parameters")
+
     c1, c2 = st.columns(2)
     with c1:
         tp_mult = st.slider("TP × ATR", 0.5, 3.0, 1.0, 0.1)
@@ -376,7 +415,7 @@ with c1:
     inferred = dataset.split("_")[0].upper()
     default_inst = inferred if inferred in INSTRUMENTS else "ES"
     instrument = st.selectbox("📈 Instrument", sorted(INSTRUMENTS.keys()),
-                              index=sorted(INSTRUMENTS.keys()).index(default_inst))
+                               index=sorted(INSTRUMENTS.keys()).index(default_inst))
 with c2:
     cash = st.number_input("💰 Capital ($)", 5000, 1_000_000, 25000, 1000)
 
@@ -427,9 +466,54 @@ if run:
             finally:
                 if tmp_path.exists():
                     tmp_path.unlink()
+
+        elif strategy == "FBO":
+            from fbo_strategy import FBOConfig
+            from backtest_fbo import run_fbo_backtest
+
+            cfg = FBOConfig(
+                or_minutes=fbo_or_mins,
+                failure_window_min=fbo_failure_window,
+                or_atr_ratio_min=fbo_atr_min,
+                or_atr_ratio_max=fbo_atr_max,
+            )
+            spec = INSTRUMENTS[instrument]
+            cfg.tick_size = spec["tick_size"]
+            cfg.tick_value = spec["tick_value"]
+            cfg.multiplier = spec["multiplier"]
+            cfg.commission_per_side = spec["commission"]
+            cfg.instrument = instrument
+
+            progress.progress(50, "Running FBO backtest...")
+            tmp_path = DATA_DIR / f"_tmp_fbo_{os.getpid()}.parquet"
+            df.to_parquet(tmp_path)
+            try:
+                stats = run_fbo_backtest(
+                    tmp_path, cfg,
+                    cash=cash, plot=False,
+                    realistic=fbo_realistic,
+                    slippage_ticks=fbo_slippage if fbo_realistic else 0.0,
+                )
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+
+            # Direction filter applied post-hoc on trades (FBO has no long_only/short_only flag yet)
+            if stats is not None and fbo_direction != "Both":
+                trades = stats.get("_trades")
+                if trades is not None and len(trades) > 0 and "Tag" in trades.columns:
+                    keep_tag = "FBO_L" if fbo_direction == "Long only" else "FBO_S"
+                    pre_n = len(trades)
+                    filtered = trades[trades["Tag"] == keep_tag].copy()
+                    post_n = len(filtered)
+                    st.caption(f"🔍 Direction filter: kept {post_n} of {pre_n} trades ({fbo_direction})")
+                    # Note: stats Sharpe / DD are NOT recomputed — user sees full-strategy stats
+                    # and direction-filtered trade table. Honest about this limitation below.
+
         elif strategy == "MeanRev":
             from meanrev_strategy import MeanRevConfig
             from backtest_meanrev import run_meanrev_backtest
+
             cfg = MeanRevConfig(
                 rsi_oversold=mr_rsi_oversold,
                 rsi_overbought=100 - mr_rsi_oversold,
@@ -460,9 +544,11 @@ if run:
             finally:
                 if tmp_path.exists():
                     tmp_path.unlink()
+
         elif strategy == "IntradayVWAP":
             from intraday_vwap_strategy import IntradayVWAPConfig
             from backtest_intraday_vwap import run_intraday_vwap_backtest
+
             cfg = IntradayVWAPConfig(
                 stop_points=iv_stop_pts,
                 target_points=iv_target_pts,
@@ -492,6 +578,7 @@ if run:
             finally:
                 if tmp_path.exists():
                     tmp_path.unlink()
+
         else:
             cfg = VolmanConfig(
                 tp_atr_mult=tp_mult,
@@ -502,6 +589,7 @@ if run:
                 use_dd=setups["dd"], use_fb=setups["fb"], use_bb=setups["bb"],
             )
             apply_instrument(cfg, instrument)
+
             progress.progress(50, "Running Volman backtest...")
             tmp_path = DATA_DIR / f"_tmp_volman_{os.getpid()}.parquet"
             df.to_parquet(tmp_path)
@@ -522,87 +610,91 @@ if run:
         st.markdown("---")
         st.subheader("📊 Results")
 
-        # Top metrics in 2x3 grid
-        r1c1, r1c2, r1c3 = st.columns(3)
-        r2c1, r2c2, r2c3 = st.columns(3)
+        if stats is None:
+            st.warning("No signals generated — try a wider date range or relax the day filter.")
+        else:
+            # Top metrics in 2x3 grid
+            r1c1, r1c2, r1c3 = st.columns(3)
+            r2c1, r2c2, r2c3 = st.columns(3)
 
-        ret = stats.get("Return [%]", 0)
-        sharpe = stats.get("Sharpe Ratio", 0)
-        dd = stats.get("Max. Drawdown [%]", 0)
-        pf = stats.get("Profit Factor", 0)
-        n_trades = int(stats.get("# Trades", 0))
-        win_rate = stats.get("Win Rate [%]", 0)
-        equity_final = stats.get("Equity Final [$]", cash)
-        commissions = stats.get("Commissions [$]", 0)
+            ret = stats.get("Return [%]", 0)
+            sharpe = stats.get("Sharpe Ratio", 0)
+            dd = stats.get("Max. Drawdown [%]", 0)
+            pf = stats.get("Profit Factor", 0)
+            n_trades = int(stats.get("# Trades", 0))
+            win_rate = stats.get("Win Rate [%]", 0)
+            equity_final = stats.get("Equity Final [$]", cash)
+            commissions = stats.get("Commissions [$]", 0)
 
-        with r1c1:
-            st.metric("Return", f"{ret:+.2f}%",
-                     delta=f"${equity_final-cash:+,.0f}",
-                     delta_color="normal")
-        with r1c2:
-            st.metric("Sharpe", f"{sharpe:.2f}",
-                     delta_color="off")
-        with r1c3:
-            st.metric("Max DD", f"{dd:.2f}%",
-                     delta_color="inverse")
-        with r2c1:
-            st.metric("# Trades", f"{n_trades:,}")
-        with r2c2:
-            st.metric("Win Rate", f"{win_rate:.1f}%")
-        with r2c3:
-            st.metric("Profit Factor", f"{pf:.2f}")
+            with r1c1:
+                st.metric("Return", f"{ret:+.2f}%",
+                          delta=f"${equity_final-cash:+,.0f}",
+                          delta_color="normal")
+            with r1c2:
+                st.metric("Sharpe", f"{sharpe:.2f}",
+                          delta_color="off")
+            with r1c3:
+                st.metric("Max DD", f"{dd:.2f}%",
+                          delta_color="inverse")
 
-        # Commission detail
-        st.caption(f"💸 Commissions: ${commissions:,.2f}  |  "
-                   f"Gross: ${equity_final - cash + commissions:+,.2f}  |  "
-                   f"Net: ${equity_final - cash:+,.2f}")
+            with r2c1:
+                st.metric("# Trades", f"{n_trades:,}")
+            with r2c2:
+                st.metric("Win Rate", f"{win_rate:.1f}%")
+            with r2c3:
+                st.metric("Profit Factor", f"{pf:.2f}")
 
-        # ============================================================
-        # EQUITY CURVE (Plotly — interactive, mobile-friendly)
-        # ============================================================
-        eq_curve = stats.get("_equity_curve")
-        if eq_curve is not None and len(eq_curve) > 0:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=eq_curve.index, y=eq_curve["Equity"],
-                mode="lines", name="Equity",
-                line=dict(color="#00d4ff", width=2),
-                fill="tozeroy",
-                fillcolor="rgba(0, 212, 255, 0.1)",
-            ))
-            fig.add_hline(y=cash, line_dash="dash", line_color="gray",
-                          annotation_text=f"Start: ${cash:,}")
-            fig.update_layout(
-                height=400, margin=dict(l=0, r=0, t=30, b=0),
-                template="plotly_dark",
-                xaxis_title=None, yaxis_title="$",
-                hovermode="x unified",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            # Commission detail
+            st.caption(f"💸 Commissions: ${commissions:,.2f} | "
+                       f"Gross: ${equity_final - cash + commissions:+,.2f} | "
+                       f"Net: ${equity_final - cash:+,.2f}")
 
-        # ============================================================
-        # TRADES + PER-SETUP BREAKDOWN
-        # ============================================================
-        trades = stats.get("_trades")
-        if trades is not None and len(trades) > 0:
-            with st.expander("📋 Per-setup breakdown"):
-                if "Tag" in trades.columns:
-                    by_tag = trades.groupby("Tag").agg(
-                        count=("PnL", "count"),
-                        total_pnl=("PnL", "sum"),
-                        avg_pnl=("PnL", "mean"),
-                        win_rate=("PnL", lambda x: (x > 0).mean() * 100),
-                    ).round(2)
-                    by_tag.columns = ["# Trades", "Total P&L ($)", "Avg P&L ($)", "Win %"]
-                    st.dataframe(by_tag, use_container_width=True)
-                else:
-                    st.info("No tag column in trades.")
+            # ============================================================
+            # EQUITY CURVE (Plotly — interactive, mobile-friendly)
+            # ============================================================
+            eq_curve = stats.get("_equity_curve")
+            if eq_curve is not None and len(eq_curve) > 0:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=eq_curve.index, y=eq_curve["Equity"],
+                    mode="lines", name="Equity",
+                    line=dict(color="#00d4ff", width=2),
+                    fill="tozeroy",
+                    fillcolor="rgba(0, 212, 255, 0.1)",
+                ))
+                fig.add_hline(y=cash, line_dash="dash", line_color="gray",
+                              annotation_text=f"Start: ${cash:,}")
+                fig.update_layout(
+                    height=400, margin=dict(l=0, r=0, t=30, b=0),
+                    template="plotly_dark",
+                    xaxis_title=None, yaxis_title="$",
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
-            with st.expander("📜 Last 20 trades"):
-                show_cols = [c for c in ["EntryTime", "ExitTime", "Size", "EntryPrice",
-                                         "ExitPrice", "PnL", "ReturnPct", "Tag"]
-                             if c in trades.columns]
-                st.dataframe(trades[show_cols].tail(20), use_container_width=True)
+            # ============================================================
+            # TRADES + PER-SETUP BREAKDOWN
+            # ============================================================
+            trades = stats.get("_trades")
+            if trades is not None and len(trades) > 0:
+                with st.expander("📋 Per-setup breakdown"):
+                    if "Tag" in trades.columns:
+                        by_tag = trades.groupby("Tag").agg(
+                            count=("PnL", "count"),
+                            total_pnl=("PnL", "sum"),
+                            avg_pnl=("PnL", "mean"),
+                            win_rate=("PnL", lambda x: (x > 0).mean() * 100),
+                        ).round(2)
+                        by_tag.columns = ["# Trades", "Total P&L ($)", "Avg P&L ($)", "Win %"]
+                        st.dataframe(by_tag, use_container_width=True)
+                    else:
+                        st.info("No tag column in trades.")
+
+                with st.expander("📜 Last 20 trades"):
+                    show_cols = [c for c in ["EntryTime", "ExitTime", "Size", "EntryPrice",
+                                             "ExitPrice", "PnL", "ReturnPct", "Tag"]
+                                 if c in trades.columns]
+                    st.dataframe(trades[show_cols].tail(20), use_container_width=True)
 
     except Exception as e:
         progress.empty()
@@ -619,11 +711,13 @@ with st.expander("ℹ️ About"):
     **Systematic Backtest Dashboard**
 
     Strategies:
-    - **Volman** — Price action setups (RB, PB, SB, DD, FB, BB) from *Understanding Price Action*
-    - **ORB** — Opening Range Breakout (Zarattini & Aziz, 2023)
+    - **ORB** — Opening Range Breakout (Zarattini & Aziz, 2023). Trend-day edge.
+    - **FBO** — Failed Breakout Reversal. Range-day fade — orthogonal to ORB.
+    - **MeanRev** — Connors RSI-2 style mean reversion.
+    - **IntradayVWAP** — Fade extensions from session VWAP.
+    - **Volman** — Price action setups (RB, PB, SB, DD, FB, BB).
 
     Data: Databento CME futures 1-minute bars.
     Engine: `backtesting.py` with realistic execution options.
-
-    Deployed on Railway. Code: [GitHub](https://github.com/)
+    Deployed on Railway. Code: [GitHub](https://github.com/Lepx350/Back-Test-Strategy)
     """)
